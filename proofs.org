@@ -1,0 +1,141 @@
+#+TITLE: Proof Tree compiler
+#+PROPERTY: header-args :tangle proof_compiler.hs
+#+STARTUP: showeverything
+#+AUTHOR: Owlyy
+#+auto_tangle: t
+
+* The Proof Tree Data Structure
+For describing the rendering the following information is required
+- A set of Antecedents
+- A consequent
+- description of line rendering
+- Right and Left labels
+
+#+BEGIN_SRC haskell
+import Control.Monad (foldM) -- For Maximum Monad Fuckery
+import Data.Char (toLower)
+
+-- Types ----------------------------------------------
+data ProofTree = Inference {
+                     antecedents :: [ProofTree],
+                     lineType    :: LineType,
+                     label       :: Label,
+                     consequent  :: String }
+               | Axiom String
+#+END_SRC
+
+For rending of the line which defines infernence, We need to know if its a single/double line and if its dotted/dashed or solid
+#+begin_src haskell
+type LineType = (LineCount, LineStyle) -- Everything required to define the rendering of the line
+data LineCount = NoLine       --       *Not Visible*
+               | SingleLine   --       -------------
+               | DoubleLine   --       =============
+  deriving Show
+data LineStyle = DottedLine
+               | DashedLine
+               | SolidLine
+  deriving Show
+#+end_src
+
+And here is the part about Labels, we can have both a left and a right lable, so we will have both left and a right label.
+#+begin_src haskell
+data Label = Label {
+    leftLabel  :: String,
+    rightLabel :: String
+}
+#+end_src
+
+* Compiler to Bussproofs
+This part is easy, as there is a direct translation from the proof tree to bussproof style, although we are restricted by the number of antecedents we have this handy error type and we write the compiler as follows
+#+BEGIN_SRC haskell
+-- Bussproofs Compiler -------------------------------------------
+data BussproofsErr = NoAntecedent
+                   | TooManyAntecendts
+                   | UnexpectedAxiom
+    deriving Show
+
+proofTreeToBussproof :: ProofTree -> Either BussproofsErr String
+proofTreeToBussproof = fmap unlines' . helper
+  where
+    helper (Axiom ax) = Right ["\\AxiomC{ " <> ax <> " }"]
+    -- helper inf = concatM $ (inf <$?> [antHelper, labelHelper, lineHelper, infHelper])
+    helper inf = concatM $ [antHelper inf, infHelper inf] -- simplified for experimentation
+#+END_SRC
+Right.... so in the above code, we recusively get the code for all the antecedents and then print the inference line after that. In case of an Axiom, we just print that.
+
+
+Now Given an inference we need to extract all the text components for it to define the helper components and we do it as follows
++ Antecedents
+We first convert all the antecedents to Bussproofs trees
+#+begin_src haskell
+antHelper :: ProofTree -> Either BussproofsErr [String]
+antHelper (Axiom _) = Left UnexpectedAxiom
+antHelper inf = concatM . map (fmap (:[]) . proofTreeToBussproof) . antecedents $ inf
+#+end_src
+The src_haskell[:exports code]{fmap} is there just to make the type-system happy
+
+
++ Labels
+Now we get the left and right labels for the inference
+#+begin_src haskell
+labelHelper :: ProofTree -> Either BussproofsErr [String]
+labelHelper (Axiom _) = Left UnexpectedAxiom
+labelHelper inf= Right ["\\LeftLabel{ " <> ll <> " }", "\\RightLabel{ " <> rl <> " }"]
+  where
+    ll = leftLabel . label $ inf
+    rl = rightLabel . label $ inf
+#+end_src
+
++ LineType
+We now focus on rendering the line, which requires the following
+#+begin_src haskell
+lineHelper :: ProofTree -> Either BussproofsErr [String]
+lineHelper (Axiom _) = Left UnexpectedAxiom
+lineHelper inf = Right [lineCountCode, lineStyleCode]
+  where
+    lineCountCode = "\\" <> (appFst toLower . show . fst . lineType $ inf)
+    lineStyleCode = "\\" <> (appFst toLower . show . snd . lineType $ inf)
+#+end_src
+
++ Now all that is left is to figure out the final inference line
+#+begin_src haskell
+infType :: ProofTree -> Either BussproofsErr [String]
+infType (Axiom _) = Left NoAntecedent
+infType inf | antCount == 1 = Right ["\\UnaryInfC"]
+            | antCount == 2 = Right ["\\BinaryInfC"]
+            | antCount == 3 = Right ["\\TernaryInfC"]
+            | antCount == 4 = Right ["\\QuaternaryInfC"]
+            | antCount == 5 = Right ["\\QuinaryInfC"]
+            | otherwise     = Left TooManyAntecendts
+  where
+    antCount = length $ antecedents inf
+
+infHelper :: ProofTree -> Either BussproofsErr [String]
+infHelper (Axiom _) = Left UnexpectedAxiom
+infHelper inf = map (<> "{ " <> consequent inf <> " }" )  <$> infType inf
+#+end_src
+
++ Helper Functions
+Helper tool to concatenating lists of monadic string lists and antimap
+#+begin_src haskell
+-- Helper Functions ----------------------------------
+concatM :: Monad m => [ m [a] ] -> m [a]
+concatM = foldM (\b -> \a -> (b <>) <$> a) []
+
+(<$?>) :: a -> [a -> b] -> [b] -- Also known as, then AnTiMaP :o (takes a list of functions and applies then to an argument)
+inp <$?> fns = ($ inp) <$> fns
+
+appFst :: (a -> a) -> [a] -> [a]
+appFst _ []= []
+appFst f (x:xs) = f x : xs
+
+fancyShow :: Either BussproofsErr String -> String
+fancyShow (Left x) = show x
+fancyShow (Right x) = x
+
+unlines' = init . unlines
+#+end_src
+* Easy Syntax for Writing Proofs
+Just listing out ideas
+- Lemma type, we would be able to write different parts of the proof separately
+- probably not a list type it would be like writing proofs in reverse
